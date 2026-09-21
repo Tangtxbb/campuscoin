@@ -24,21 +24,42 @@
    # 方式 B：本地打包上传
    scp -r D:/区块链学术研究 root@<公网IP>:/root/campuscoin
    ```
-4. **装依赖并启动**：
+4. **装依赖并启动**（pip 记得加国内镜像源）：
    ```bash
    cd campuscoin
-   pip install -r requirements.txt
+   sudo apt install -y python3 python3-venv python3-pip
+   python3 -m venv venv && source venv/bin/activate
+   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
    python -m vcoin.node --host 0.0.0.0 --port 8000
    ```
+   后台常驻：`nohup python -m vcoin.node --host 0.0.0.0 --port 8000 > node.log 2>&1 &`
 5. **验证**：浏览器打开 `http://<公网IP>:8000`，能看到区块浏览器即成功。
 
-## 三、用 Docker 一键部署（推荐）
+## 三、用 Docker 部署（可选）
+
+> 国内 Docker Hub 经常拉不动镜像（报 `i/o timeout` 或 `not found`）。如果遇到，先在
+> `/etc/docker/daemon.json` 配好可用镜像源，**不要用**阿里云那种 `xxx.mirror.aliyuncs.com`
+> 个人加速器 ID（多半已失效）。下面这组实测可用：
 
 ```bash
+sudo tee /etc/docker/daemon.json <<-'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run",
+    "https://docker.1panel.live"
+  ]
+}
+EOF
+sudo systemctl restart docker
+
 cd campuscoin
 docker build -t campuscoin .
 docker run -d --name campuscoin -p 8000:8000 --restart unless-stopped campuscoin
 ```
+
+> 提示：`docker build` 里那句 `DEPRECATED: The legacy builder...` 是**无害警告**，不是错误，
+> 也不用装 buildx。真正的错误只会是 `FROM python:3.12-slim` 那一行的拉取结果。
 
 ## 四、让本地电脑连上公网节点
 

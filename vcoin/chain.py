@@ -36,24 +36,25 @@ def cumulative_subsidy(up_to_height: int) -> int:
     return sum(block_subsidy(h) for h in range(1, up_to_height + 1))
 
 
-def expected_difficulty(chain, prev: Block) -> int:
-    """计算 prev 之后下一个区块应有的难度（动态调整）。"""
+def expected_target(chain, prev: Block) -> int:
+    """计算 prev 之后下一个区块应有的目标值（256 位，精细平滑调整）。
+
+    与比特币一致：目标值越小越难。出块太快则调小目标（更难），太慢则调大。
+    单次调整最多 ×4 或 ÷4，避免剧烈波动。
+    """
     if prev.index == 0:
-        return config.INITIAL_DIFFICULTY
+        return config.INITIAL_TARGET
     if prev.index % config.DIFFICULTY_ADJUST_INTERVAL != 0:
-        return prev.difficulty
+        return prev.target
     # 统计最近 INTERVAL 个真实区块（不含创世块，创世块时间戳为 0 会干扰计算）
     first = chain[prev.index - config.DIFFICULTY_ADJUST_INTERVAL + 1]
     actual = (prev.timestamp - first.timestamp) / 1000.0 / config.DIFFICULTY_ADJUST_INTERVAL
-    target = config.BLOCK_TIME_TARGET
-    new = prev.difficulty
-    if actual < target / 2:
-        new += 1                 # 出块太快 -> 难度上升
-    elif actual > target * 2:
-        new -= 1                 # 出块太慢 -> 难度下降
-    # 注意：难度按"前导 0 个数"计，每 +1 等于 16 倍难度跃升，粒度较粗，
-    # 教学链设上限防止过度反应导致无法出块（真实比特币用 256 位目标值实现精细调整）。
-    return min(config.MAX_DIFFICULTY, max(1, new))
+    target_time = config.BLOCK_TIME_TARGET
+    new_target = int(prev.target * actual / target_time)
+    low = prev.target // config.ADJUST_FACTOR_MAX
+    high = prev.target * config.ADJUST_FACTOR_MAX
+    new_target = max(low, min(high, new_target))
+    return max(1, min(config.MAX_TARGET, new_target))
 
 
 def verify_tx_against(tx: Transaction, utxo: dict):
@@ -111,12 +112,12 @@ def validate_chain(chain):
             return False, f"区块 {i} 前一哈希不匹配", 0
         if cur.hash != cur.compute_hash():
             return False, f"区块 {i} 哈希校验失败", 0
-        if not cur.hash.startswith("0" * cur.difficulty):
-            return False, f"区块 {i} 不满足难度 {cur.difficulty}", 0
+        if int(cur.hash, 16) >= cur.target:
+            return False, f"区块 {i} 不满足目标值（难度 {cur.difficulty}）", 0
         if cur.merkle_root != merkle_root([t.tx_id for t in cur.transactions]):
             return False, f"区块 {i} Merkle 根不匹配", 0
-        if cur.difficulty != expected_difficulty(chain, prev):
-            return False, f"区块 {i} 难度不符", 0
+        if cur.target != expected_target(chain, prev):
+            return False, f"区块 {i} 目标值不符", 0
         if not cur.transactions or not cur.transactions[0].is_coinbase():
             return False, f"区块 {i} 缺少 coinbase 交易", 0
         fees = 0
@@ -139,7 +140,7 @@ def validate_chain(chain):
         for tx in cur.transactions:
             for idx, out in enumerate(tx.outputs):
                 utxo[(tx.tx_id, idx)] = out
-        total_work += 1 << cur.difficulty
+        total_work += config.MAX_TARGET // cur.target
     return True, "整条链有效", total_work
 
 
@@ -155,7 +156,7 @@ class Blockchain:
     def _create_genesis_block(self) -> Block:
         tx = Transaction.coinbase(config.SYSTEM_ADDRESS, 0, 0)
         return Block(0, [tx], "0" * 64, timestamp=0,
-                     difficulty=config.INITIAL_DIFFICULTY)
+                     target=config.INITIAL_TARGET)
 
     @property
     def latest_block(self) -> Block:
@@ -207,8 +208,8 @@ class Blockchain:
         return True, msg
 
     # ---------- 挖矿 ----------
-    def next_difficulty(self) -> int:
-        return expected_difficulty(self.chain, self.latest_block)
+    def next_target(self) -> int:
+        return expected_target(self.chain, self.latest_block)
 
     def mine(self, miner_address: str) -> Block:
         """打包交易 + 区块补贴与手续费，执行 PoW，接入链尾。"""
@@ -235,7 +236,7 @@ class Blockchain:
 
         coinbase = Transaction.coinbase(miner_address, reward, height)
         block = Block(height, [coinbase] + selected, self.latest_block.hash,
-                      difficulty=self.next_difficulty())
+                      target=self.next_target())
         block.mine()
 
         self.chain.append(block)

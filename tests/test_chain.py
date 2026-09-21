@@ -12,7 +12,7 @@ from vcoin import (  # noqa: E402
     merkle_proof, merkle_root, verify_proof,
 )
 from vcoin import config  # noqa: E402
-from vcoin.chain import block_subsidy, expected_difficulty  # noqa: E402
+from vcoin.chain import block_subsidy, expected_target  # noqa: E402
 
 COIN = config.COIN
 
@@ -36,7 +36,7 @@ class TestMining(unittest.TestCase):
     def test_mining_valid_block(self):
         b = self.chain.mine(self.miner.address)
         self.assertEqual(b.index, 1)
-        self.assertTrue(b.hash.startswith("0" * b.difficulty))
+        self.assertLess(int(b.hash, 16), b.target)
         self.assertEqual(b.previous_hash, self.chain.chain[0].hash)
 
     def test_mining_reward(self):
@@ -50,9 +50,19 @@ class TestMining(unittest.TestCase):
         self.assertEqual(block_subsidy(2 * config.HALVING_INTERVAL),
                          config.INITIAL_REWARD // 4)
 
-    def test_expected_difficulty(self):
-        self.assertEqual(expected_difficulty(self.chain.chain, self.chain.chain[0]),
-                         config.INITIAL_DIFFICULTY)
+    def test_expected_target(self):
+        self.assertEqual(expected_target(self.chain.chain, self.chain.chain[0]),
+                         config.INITIAL_TARGET)
+
+    def test_difficulty_adjustment(self):
+        # 连续瞬间出块 -> 目标值应逐次变小（难度上升），且单次最多 ÷4
+        for _ in range(11):
+            self.chain.mine(self.miner.address)
+        d0 = self.chain.chain[1].difficulty
+        d11 = self.chain.chain[11].difficulty
+        self.assertGreater(d11, d0)
+        ok, msg, _ = self.chain.is_chain_valid()
+        self.assertTrue(ok, msg)
 
 
 class TestUTXO(unittest.TestCase):

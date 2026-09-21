@@ -31,6 +31,7 @@ P2P（节点间用）：
 """
 
 import os
+import socket
 import threading
 import time
 
@@ -48,12 +49,14 @@ EXPLORER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explor
 
 
 class Node:
-    def __init__(self, data_dir, port, peers=(), mine=False, miner_address=None):
+    def __init__(self, data_dir, port, peers=(), mine=False, miner_address=None,
+                 discover=False):
         self.data_dir = data_dir
         self.port = port
         self.peers = set(peers)
         self.mine_flag = mine
         self.miner_address = miner_address
+        self.discover = discover
         self.chain_file = os.path.join(data_dir, "chain.json")
 
         self.chain = Blockchain()
@@ -310,6 +313,41 @@ class Node:
         from .chain import block_subsidy
         return block_subsidy(self.chain.height + 1)
 
+    # ---------------- 节点自动发现 ----------------
+    def _discovery_loop(self):
+        """局域网 UDP 广播：周期广播自己的端口，并监听其他节点的广播。"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            sock.bind(("", config.DISCOVERY_PORT))
+        except OSError:
+            print("[发现] UDP 端口被占用，跳过自动发现")
+            return
+        sock.settimeout(1.0)
+        msg = f"CAMP|{self.port}".encode()
+        print(f"[发现] 已在 UDP {config.DISCOVERY_PORT} 开启局域网自动发现")
+        while True:
+            try:
+                sock.sendto(msg, ("255.255.255.255", config.DISCOVERY_PORT))
+            except Exception:
+                pass
+            end = time.time() + 3.0
+            while time.time() < end:
+                try:
+                    data, addr = sock.recvfrom(1024)
+                except socket.timeout:
+                    break
+                if data.startswith(b"CAMP|"):
+                    peer_port = int(data.split(b"|")[1])
+                    if peer_port != self.port:
+                        peer = f"http://{addr[0]}:{peer_port}"
+                        if peer not in self.peers:
+                            self.peers.add(peer)
+                            print(f"[发现] 新邻居 {peer}")
+                            threading.Thread(target=self.sync, daemon=True).start()
+            time.sleep(2)
+
     # ---------------- 启动 ----------------
     def run(self, host=None, port=None):
         if self.mine_flag:
@@ -317,6 +355,8 @@ class Node:
                 print("[节点] 开启挖矿需要 --miner 地址")
             else:
                 threading.Thread(target=self._mine_loop, daemon=True).start()
+        if self.discover:
+            threading.Thread(target=self._discovery_loop, daemon=True).start()
         threading.Thread(target=self._sync_loop, daemon=True).start()
         self.app.run(host=host or config.HOST, port=port or self.port, threaded=True)
 
@@ -330,6 +370,7 @@ def main():
     parser.add_argument("--peer", action="append", default=[], help="邻居节点 URL，可多次指定")
     parser.add_argument("--mine", action="store_true", help="后台持续挖矿")
     parser.add_argument("--miner", default=None, help="挖矿奖励地址")
+    parser.add_argument("--discover", action="store_true", help="局域网 UDP 自动发现邻居")
     args = parser.parse_args()
 
     data_dir = args.data or os.path.join(
@@ -337,7 +378,8 @@ def main():
         "data", f"node-{args.port}")
 
     node = Node(data_dir, args.port, peers=args.peer,
-                mine=args.mine, miner_address=args.miner)
+                mine=args.mine, miner_address=args.miner,
+                discover=args.discover)
     print("=" * 60)
     print(f"  {config.COIN_NAME}（{config.COIN_SYMBOL}）P2P 节点")
     print(f"  监听 http://{args.host}:{args.port}  数据目录 {data_dir}")

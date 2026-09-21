@@ -21,37 +21,42 @@ from .wallet import pubkey_to_address
 
 
 class TxIn:
-    """交易输入：引用一笔已存在的输出，并用私钥签名"解锁"它。"""
+    """交易输入：引用一笔已存在的输出，并签名/脚本"解锁"它。"""
 
-    def __init__(self, prev_tx_id, prev_index, public_key=None, signature=None):
+    def __init__(self, prev_tx_id, prev_index, public_key=None, signature=None,
+                 unlock_script=None):
         self.prev_tx_id = prev_tx_id       # 引用的交易 ID
         self.prev_index = int(prev_index)  # 引用的输出序号
-        self.public_key = public_key       # 解锁用的公钥
-        self.signature = signature         # 解锁用的签名
+        self.public_key = public_key       # 解锁用的公钥（普通地址支付）
+        self.signature = signature         # 解锁用的签名（普通地址支付）
+        self.unlock_script = unlock_script  # 可选：脚本解锁数据（智能合约）
 
     def to_dict(self):
         return {"prev_tx_id": self.prev_tx_id, "prev_index": self.prev_index,
-                "public_key": self.public_key, "signature": self.signature}
+                "public_key": self.public_key, "signature": self.signature,
+                "unlock_script": self.unlock_script}
 
     @classmethod
     def from_dict(cls, d):
         return cls(d["prev_tx_id"], d["prev_index"],
-                   d.get("public_key"), d.get("signature"))
+                   d.get("public_key"), d.get("signature"),
+                   d.get("unlock_script"))
 
 
 class TxOut:
-    """交易输出：一笔"锁给某地址"的钱，将来可被花费。"""
+    """交易输出：一笔"锁给某地址/某脚本"的钱，将来可被花费。"""
 
-    def __init__(self, amount, address):
+    def __init__(self, amount, address=None, script=None):
         self.amount = int(amount)          # 最小单位（聪）
-        self.address = address
+        self.address = address             # 收款地址（无脚本时用）
+        self.script = script               # 可选：自定义锁定脚本（智能合约）
 
     def to_dict(self):
-        return {"amount": self.amount, "address": self.address}
+        return {"amount": self.amount, "address": self.address, "script": self.script}
 
     @classmethod
     def from_dict(cls, d):
-        return cls(d["amount"], d["address"])
+        return cls(d["amount"], d.get("address"), d.get("script"))
 
 
 class Transaction:

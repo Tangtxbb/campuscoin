@@ -8,12 +8,14 @@
 
 import json
 import os
+import time
 
 from ecdsa import BadSignatureError, SECP256k1, VerifyingKey
 
 from . import config
 from .block import Block
 from .merkle import merkle_root
+from .script import run_script
 from .transaction import Transaction
 from .wallet import pubkey_to_address
 
@@ -75,19 +77,26 @@ def verify_tx_against(tx: Transaction, utxo: dict):
         ref = utxo.get(key)
         if ref is None:
             return False, "引用的输出不存在或已被花费", 0
-        if not inp.public_key or not inp.signature:
-            return False, "输入缺少签名", 0
-        if pubkey_to_address(inp.public_key) != ref.address:
-            return False, "公钥与输出地址不匹配", 0
-        try:
-            vk = VerifyingKey.from_string(bytes.fromhex(inp.public_key), curve=SECP256k1)
-        except Exception:
-            return False, "公钥非法", 0
-        try:
-            if not vk.verify(bytes.fromhex(inp.signature), tx.signing_hash().encode("utf-8")):
+        if ref.script:
+            # 智能合约输出：运行脚本 VM 校验解锁条件
+            ctx = {"sighash": tx.signing_hash(), "now": int(time.time() * 1000)}
+            if not run_script(ref.script, inp.unlock_script or [], ctx):
+                return False, "脚本解锁失败", 0
+        else:
+            # 普通地址支付：验签 + 地址匹配
+            if not inp.public_key or not inp.signature:
+                return False, "输入缺少签名", 0
+            if pubkey_to_address(inp.public_key) != ref.address:
+                return False, "公钥与输出地址不匹配", 0
+            try:
+                vk = VerifyingKey.from_string(bytes.fromhex(inp.public_key), curve=SECP256k1)
+            except Exception:
+                return False, "公钥非法", 0
+            try:
+                if not vk.verify(bytes.fromhex(inp.signature), tx.signing_hash().encode("utf-8")):
+                    return False, "签名验证失败", 0
+            except BadSignatureError:
                 return False, "签名验证失败", 0
-        except BadSignatureError:
-            return False, "签名验证失败", 0
         total_in += ref.amount
     total_out = tx.output_total()
     if total_out > total_in:

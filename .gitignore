@@ -1,0 +1,22 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- 链数据（本地账本，删除即可重置链，勿提交） ----
+data/
+
+# ---- 钱包文件（含私钥/助记词，绝对不要提交！） ----
+*.json
+
+# ---- 项目本地工作区数据 ----
+.workbuddy/
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

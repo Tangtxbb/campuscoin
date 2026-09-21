@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>校园币区块浏览器</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --card: #ffffff; --text: #2c2c2a; --muted: #6b6a65;
+    --border: #e3e2dc; --accent: #185fa5; --teal: #0f6e56; --amber: #854f0b;
+    --red: #a32d2d; --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 24px 20px 60px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0; }
+  .coin { color: var(--accent); font-weight: 600; }
+  .stat { color: var(--muted); font-size: 13px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card .label { font-size: 12px; color: var(--muted); }
+  .card .value { font-size: 18px; font-weight: 600; margin-top: 4px; font-family: var(--mono); }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 10px; margin-top: 16px; overflow: hidden; }
+  .panel h2 { font-size: 14px; font-weight: 600; margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .row { padding: 12px 16px; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .row:last-child { border-bottom: none; }
+  .mono { font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .search { display: flex; gap: 8px; margin-top: 16px; }
+  input { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; }
+  button { padding: 10px 16px; border: none; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; font-size: 14px; }
+  button:hover { opacity: .9; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; }
+  .tag.valid { background: #eaf3de; color: var(--teal); }
+  .tag.invalid { background: #fcebeb; color: var(--red); }
+  .tag.amber { background: #faeeda; color: var(--amber); }
+  a { color: var(--accent); text-decoration: none; cursor: pointer; }
+  .hint { color: var(--muted); font-size: 12px; padding: 0 16px 12px; }
+  .empty { color: var(--muted); padding: 20px 16px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1><span class="coin" id="coin-name">校园币</span> 区块浏览器</h1>
+    <span class="stat" id="node-info"></span>
+  </header>
+
+  <div class="grid" id="stats"></div>
+
+  <div class="search">
+    <input id="q" placeholder="输入地址或交易 ID 查询…">
+    <button onclick="search()">查询</button>
+    <button onclick="refresh()">刷新</button>
+  </div>
+
+  <div class="panel" id="result" style="display:none"></div>
+
+  <div class="panel">
+    <h2>最新区块</h2>
+    <div id="blocks"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>待打包交易池（mempool）</h2>
+    <div id="mempool"><div class="empty">加载中…</div></div>
+  </div>
+</div>
+
+<script>
+const COIN = 1e8;
+function fmt(sat) { return (Number(sat) / COIN).toLocaleString('zh-CN', {maximumFractionDigits: 8}); }
+async function api(path) { const r = await fetch('/api' + path); return r.json(); }
+function short(h) { return h ? h.slice(0, 16) + '…' : ''; }
+
+async function refresh() {
+  try {
+    const info = await api('/info');
+    document.getElementById('coin-name').textContent = info.coin;
+    document.getElementById('node-info').textContent =
+      `高度 ${info.height} · 难度 ${info.difficulty} · 邻居 ${info.peers.length} 个`;
+    const validTag = info.valid ? '<span class="tag valid">链有效</span>' : '<span class="tag invalid">链无效</span>';
+    document.getElementById('stats').innerHTML = `
+      <div class="card"><div class="label">链高度</div><div class="value">${info.height}</div></div>
+      <div class="card"><div class="label">当前难度</div><div class="value">${info.difficulty}</div></div>
+      <div class="card"><div class="label">下块补贴</div><div class="value">${fmt(info.subsidy)}</div></div>
+      <div class="card"><div class="label">状态</div><div class="value">${validTag}</div></div>`;
+
+    const chain = await api('/chain');
+    const blocks = chain.chain.slice().reverse().slice(0, 10);
+    document.getElementById('blocks').innerHTML = blocks.map(b => `
+      <div class="row">
+        <a onclick="showBlock(${b.index})">区块 #${b.index}</a>
+        <span class="tag amber">难度 ${b.difficulty}</span>
+        交易 ${b.transactions.length} 笔 ·
+        <span class="mono">${short(b.hash)}</span> · nonce ${b.nonce}
+      </div>`).join('') || '<div class="empty">暂无区块</div>';
+
+    const mem = await api('/mempool');
+    document.getElementById('mempool').innerHTML = mem.pending.map(t => `
+      <div class="row">${t.inputs.length} 入 → ${t.outputs.length} 出 ·
+        <a onclick="showTx('${t.tx_id}')">${short(t.tx_id)}</a></div>`).join('')
+      || '<div class="empty">交易池为空</div>';
+  } catch (e) {
+    document.getElementById('blocks').innerHTML = '<div class="empty">无法连接节点</div>';
+  }
+}
+
+async function search() {
+  const q = document.getElementById('q').value.trim();
+  if (!q) return;
+  const panel = document.getElementById('result');
+  panel.style.display = 'block';
+  if (q.length === 64) { await showTx(q); return; }
+  try {
+    const d = await api('/address/' + q);
+    if (d.address) {
+      panel.innerHTML = `<h2>地址详情</h2>
+        <div class="row">地址：<span class="mono">${d.address}</span></div>
+        <div class="row">余额：<b>${fmt(d.balance)}</b></div>
+        <div class="row">UTXO 数：${d.utxos.length}</div>
+        <div class="hint">UTXO 列表（未花费输出）：</div>
+        ${d.utxos.slice(0, 20).map(u => `<div class="row mono">${short(u.tx_id)} #${u.index} · ${fmt(u.amount)}</div>`).join('')}`;
+    }
+  } catch (e) { panel.innerHTML = '<div class="empty">未找到该地址或交易</div>'; }
+}
+
+async function showBlock(index) {
+  const b = await api('/block/' + index);
+  const panel = document.getElementById('result');
+  panel.style.display = 'block';
+  panel.innerHTML = `<h2>区块 #${b.index}</h2>
+    <div class="row mono">哈希：${b.hash}</div>
+    <div class="row mono">前一哈希：${short(b.previous_hash)}</div>
+    <div class="row mono">Merkle 根：${b.merkle_root}</div>
+    <div class="row">难度 ${b.difficulty} · nonce ${b.nonce} · 交易 ${b.transactions.length} 笔</div>
+    ${b.transactions.map((t, i) => `
+      <div class="row">${i === 0 ? '<span class="tag amber">coinbase</span>' : ''}
+        <a onclick="showTx('${t.tx_id}')">${short(t.tx_id)}</a>
+        ${t.inputs.length} 入 → ${t.outputs.length} 出</div>`).join('')}`;
+}
+
+async function showTx(tx_id) {
+  let d;
+  try { d = await api('/tx/' + tx_id); } catch (e) { return; }
+  if (!d.tx) return;
+  const t = d.tx;
+  const panel = document.getElementById('result');
+  panel.style.display = 'block';
+  const totalOut = t.outputs.reduce((s, o) => s + o.amount, 0);
+  panel.innerHTML = `<h2>交易</h2>
+    <div class="row mono">${t.tx_id}</div>
+    <div class="row">所在区块：${d.block === null ? '交易池（未打包）' : '#' + d.block}</div>
+    <div class="hint">输入（${t.inputs.length}）：</div>
+    ${t.inputs.map(i => `<div class="row mono">${short(i.prev_tx_id)} #${i.prev_index}</div>`).join('')}
+    <div class="hint">输出（${t.outputs.length}，共 ${fmt(totalOut)}）：</div>
+    ${t.outputs.map((o, i) => `<div class="row">#${i} → <span class="mono">${short(o.address)}</span> · ${fmt(o.amount)}</div>`).join('')}`;
+}
+
+refresh();
+</script>
+</body>
+</html>
